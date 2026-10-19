@@ -8,6 +8,72 @@
 using namespace std;
 using namespace bls12_381;
 
+void TestCarryBorrowRegressions()
+{
+    const uint64_t maximum = ~uint64_t{0};
+    size_t checks = 0, failures = 0;
+    const auto check_helpers = [&](uint64_t x, uint64_t y, uint64_t input) {
+        const uint128_t sum = uint128_t(x) + uint128_t(y) + input;
+        const auto [actual_sum, actual_carry] = Add64(x, y, input);
+        ++checks;
+        if(actual_sum != uint64_t(sum) || actual_carry != uint64_t(sum >> 64))
+        {
+            ++failures;
+            cerr << "Add64 x=" << x << " y=" << y << " carry=" << input
+                 << " got=" << actual_sum << ',' << actual_carry
+                 << " expected=" << uint64_t(sum) << ',' << uint64_t(sum >> 64) << '\n';
+        }
+        const uint128_t subtrahend = uint128_t(y) + input;
+        const auto [actual_diff, actual_borrow] = Sub64(x, y, input);
+        const uint64_t expected_diff = uint64_t(uint128_t(x) - subtrahend);
+        const uint64_t expected_borrow = uint128_t(x) < subtrahend;
+        ++checks;
+        if(actual_diff != expected_diff || actual_borrow != expected_borrow)
+        {
+            ++failures;
+            cerr << "Sub64 x=" << x << " y=" << y << " borrow=" << input
+                 << " got=" << actual_diff << ',' << actual_borrow
+                 << " expected=" << expected_diff << ',' << expected_borrow << '\n';
+        }
+    };
+    for(const auto x : array<uint64_t, 5>{0, 1, 2, maximum - 1, maximum})
+        for(const auto y : array<uint64_t, 5>{0, 1, 2, maximum - 1, maximum})
+            for(uint64_t input = 0; input != 2; ++input)
+                check_helpers(x, y, input);
+    mt19937_64 generator{0x424c533132333831ULL};
+    for(size_t i = 0; i < 4096; ++i)
+    {
+        const auto x = generator(), y = generator();
+        check_helpers(x, y, 0);
+        check_helpers(x, y, 1);
+    }
+
+    const fp one(array<uint64_t, 6>{1, 0, 0, 0, 0, 0});
+    const fp two_words_minus_one(array<uint64_t, 6>{maximum, maximum, 0, 0, 0, 0});
+    const fp two_words(array<uint64_t, 6>{0, 0, 1, 0, 0, 0});
+    const fp borrow_operand(array<uint64_t, 6>{1, maximum, 0, 0, 0, 0});
+    fp result;
+    _add(&result, &one, &two_words_minus_one);
+    ++checks;
+    if(result.d != two_words.d)
+    {
+        ++failures;
+        cerr << "_add cross-limb got=" << result.d[0] << ',' << result.d[1] << ',' << result.d[2]
+             << " expected=0,0,1\n";
+    }
+    _subtract(&result, &two_words, &borrow_operand);
+    ++checks;
+    if(result.d != array<uint64_t, 6>{maximum, 0, 0, 0, 0, 0})
+    {
+        ++failures;
+        cerr << "_subtract cross-limb got=" << result.d[0] << ',' << result.d[1] << ',' << result.d[2]
+             << " expected=" << maximum << ",0,0\n";
+    }
+    cout << "carry_borrow_checks=" << checks << " failures=" << failures << endl;
+    if(failures)
+        throw invalid_argument("carry/borrow regression failed");
+}
+
 array<uint64_t, 4> random_scalar()
 {
     random_device rd;
@@ -2299,6 +2365,7 @@ void TestOutOfRangeInputs() {
 
 int main()
 {
+    TestCarryBorrowRegressions();
     TestScalar();
 
     TestFieldElementValidation();
