@@ -1,0 +1,168 @@
+name: Native Portability (Donor Only)
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.id }} / DONOR_ONLY
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-release
+            runner: ubuntu-24.04
+            os: Linux
+            arch: x86_64
+            config: Release
+            tests: bls12-381,bls12-381-nobmi2
+          - id: intel-debug
+            runner: macos-15-intel
+            os: Darwin
+            arch: x86_64
+            config: Debug
+            tests: bls12-381
+          - id: intel-release
+            runner: macos-15-intel
+            os: Darwin
+            arch: x86_64
+            config: Release
+            tests: bls12-381
+          - id: arm-release-control
+            runner: macos-15
+            os: Darwin
+            arch: arm64
+            config: Release
+            tests: bls12-381
+    env:
+      EXPECTED_OS: ${{ matrix.os }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      EXPECTED_TESTS: ${{ matrix.tests }}
+      BUILD_CONFIG: ${{ matrix.config }}
+      CTEST_TIMEOUT: ${{ matrix.id == 'intel-debug' && '1800' || '900' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Record source and platform, configure with default compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BUILD_DIR="$RUNNER_TEMP/bls-native-${{ matrix.id }}"
+          export EVIDENCE="$RUNNER_TEMP/bls-evidence-${{ matrix.id }}"
+          printf 'BUILD_DIR=%s\nEVIDENCE=%s\n' "$BUILD_DIR" "$EVIDENCE" >> "$GITHUB_ENV"
+          mkdir -p "$EVIDENCE"
+          printf '%s\n' DONOR_ONLY_NOT_FORGE_TOOLCHAIN_QUALIFICATION > "$EVIDENCE/scope.txt"
+          git rev-parse HEAD > "$EVIDENCE/source-head.txt"
+          git status --porcelain > "$EVIDENCE/source-status.txt"
+          git ls-files -z | xargs -0 shasum -a 256 > "$EVIDENCE/source.sha256"
+          uname -sm > "$EVIDENCE/uname.txt"
+          cmake --version > "$EVIDENCE/cmake.txt"
+          ctest --version > "$EVIDENCE/ctest.txt"
+          c++ --version > "$EVIDENCE/default-cxx.txt" 2>&1
+          /usr/bin/python3 --version > "$EVIDENCE/python.txt" 2>&1
+          test "$(uname -s)" = "$EXPECTED_OS"
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          args=(-DCMAKE_BUILD_TYPE="$BUILD_CONFIG" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)
+          if [[ "$EXPECTED_OS" == Darwin ]]; then
+            sw_vers > "$EVIDENCE/sw_vers.txt"
+            sysctl hw.machine hw.model > "$EVIDENCE/hardware.txt"
+            xcode-select -p > "$EVIDENCE/xcode-path.txt"
+            sdk=$(xcrun --sdk macosx --show-sdk-path)
+            printf '%s\n' "$sdk" > "$EVIDENCE/sdk.txt"
+            args+=(-DCMAKE_OSX_SYSROOT="$sdk")
+          else
+            cat /etc/os-release > "$EVIDENCE/os-release.txt"
+            lscpu > "$EVIDENCE/cpu.txt"
+          fi
+          trap 'rc=$?; printf "%s\n" "$rc" > "$EVIDENCE/configure-exit.txt"' EXIT
+          printf '%q ' cmake -S . -B "$BUILD_DIR" "${args[@]}" > "$EVIDENCE/configure-command.txt"
+          cmake -S . -B "$BUILD_DIR" "${args[@]}" 2>&1 | tee "$EVIDENCE/configure.log"
+          cp "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR/compile_commands.json" "$EVIDENCE/"
+          compiler=$(sed -n 's/^CMAKE_CXX_COMPILER:FILEPATH=//p' "$BUILD_DIR/CMakeCache.txt")
+          test -n "$compiler"
+          "$compiler" --version > "$EVIDENCE/selected-cxx.txt" 2>&1
+          ctest --test-dir "$BUILD_DIR" --show-only=json-v1 > "$EVIDENCE/registry.json"
+          /usr/bin/python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['EVIDENCE'])
+          expected = sorted(os.environ['EXPECTED_TESTS'].split(','))
+          tests = json.loads((root / 'registry.json').read_text())['tests']
+          if sorted(t['name'] for t in tests) != expected:
+              raise SystemExit('Registered test names/count differ from the required full suite')
+          for test in tests:
+              props = {p['name']: p['value'] for p in test.get('properties', [])}
+              if props.get('DISABLED') or props.get('WILL_FAIL'):
+                  raise SystemExit('Disabled or expected-failure test is not permitted')
+              if test['name'] == 'bls12-381-nobmi2' and props.get('ENVIRONMENT') != ['BLS_DISABLE_BMI2=1']:
+                  raise SystemExit('Missing exact existing no-BMI2 control')
+          commands = json.loads((root / 'compile_commands.json').read_text())
+          assembly = [c for c in commands if Path(c['file']).name == 'arithmetic.s']
+          if len(assembly) != (1 if os.environ['EXPECTED_OS'] == 'Linux' else 0):
+              raise SystemExit('Unexpected assembly selection for the actual platform')
+          print('Registered full suite:', expected)
+          PY
+
+      - name: Build only donor unit tests
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          trap 'rc=$?; printf "%s\n" "$rc" > "$EVIDENCE/build-exit.txt"' EXIT
+          cmake --build "$BUILD_DIR" --target unittests -j2 2>&1 | tee "$EVIDENCE/build.log"
+          shasum -a 256 "$BUILD_DIR/test/unittests" "$BUILD_DIR/libbls12-381.a" > "$EVIDENCE/binaries.sha256"
+          file "$BUILD_DIR/test/unittests" > "$EVIDENCE/binary-format.txt"
+          nm -g "$BUILD_DIR/libbls12-381.a" > "$EVIDENCE/archive-symbols.txt" 2>&1
+
+      - name: Run and verify every registered test
+        shell: bash
+        timeout-minutes: 32
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          trap 'rc=$?; printf "%s\n" "$rc" > "$EVIDENCE/test-exit.txt"' EXIT
+          ctest --test-dir "$BUILD_DIR" -j1 --no-tests=error --timeout "$CTEST_TIMEOUT" \
+            --output-on-failure --output-junit "$EVIDENCE/tests.xml" 2>&1 | tee "$EVIDENCE/test.log"
+          /usr/bin/python3 - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = ET.parse(Path(os.environ['EVIDENCE']) / 'tests.xml').getroot()
+          expected = sorted(os.environ['EXPECTED_TESTS'].split(','))
+          cases = root.findall('.//testcase')
+          if sorted(c.get('name') for c in cases) != expected:
+              raise SystemExit('Executed test names/count differ from the required full suite')
+          if any(root.findall('.//' + tag) for tag in ('failure', 'error', 'skipped')):
+              raise SystemExit('Failure, error or skipped test in donor results')
+          print('DONOR_ONLY completed full suite:', expected)
+          PY
+
+      - name: Preserve raw CTest log including failures
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/bls-native-${{ matrix.id }}/Testing/Temporary/LastTest.log"
+          if [[ -f "$log" ]]; then
+            cp "$log" "$RUNNER_TEMP/bls-evidence-${{ matrix.id }}/LastTest.log"
+          fi
+
+      - name: Upload raw donor evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bls-native-${{ matrix.id }}
+          path: ${{ runner.temp }}/bls-evidence-${{ matrix.id }}/
+          if-no-files-found: error
+          retention-days: 14

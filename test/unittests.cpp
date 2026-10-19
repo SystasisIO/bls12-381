@@ -2,11 +2,78 @@
 #include <vector>
 #include <random>
 #include <iostream>
+#include <chrono>
 
 #include <bls12-381/bls12-381.hpp>
 
 using namespace std;
 using namespace bls12_381;
+
+void TestCarryBorrowRegressions()
+{
+    const uint64_t maximum = ~uint64_t{0};
+    size_t checks = 0, failures = 0;
+    const auto check_helpers = [&](uint64_t x, uint64_t y, uint64_t input) {
+        const uint128_t sum = uint128_t(x) + uint128_t(y) + input;
+        const auto [actual_sum, actual_carry] = Add64(x, y, input);
+        ++checks;
+        if(actual_sum != uint64_t(sum) || actual_carry != uint64_t(sum >> 64))
+        {
+            ++failures;
+            cerr << "Add64 x=" << x << " y=" << y << " carry=" << input
+                 << " got=" << actual_sum << ',' << actual_carry
+                 << " expected=" << uint64_t(sum) << ',' << uint64_t(sum >> 64) << '\n';
+        }
+        const uint128_t subtrahend = uint128_t(y) + input;
+        const auto [actual_diff, actual_borrow] = Sub64(x, y, input);
+        const uint64_t expected_diff = uint64_t(uint128_t(x) - subtrahend);
+        const uint64_t expected_borrow = uint128_t(x) < subtrahend;
+        ++checks;
+        if(actual_diff != expected_diff || actual_borrow != expected_borrow)
+        {
+            ++failures;
+            cerr << "Sub64 x=" << x << " y=" << y << " borrow=" << input
+                 << " got=" << actual_diff << ',' << actual_borrow
+                 << " expected=" << expected_diff << ',' << expected_borrow << '\n';
+        }
+    };
+    for(const auto x : array<uint64_t, 5>{0, 1, 2, maximum - 1, maximum})
+        for(const auto y : array<uint64_t, 5>{0, 1, 2, maximum - 1, maximum})
+            for(uint64_t input = 0; input != 2; ++input)
+                check_helpers(x, y, input);
+    mt19937_64 generator{0x424c533132333831ULL};
+    for(size_t i = 0; i < 4096; ++i)
+    {
+        const auto x = generator(), y = generator();
+        check_helpers(x, y, 0);
+        check_helpers(x, y, 1);
+    }
+
+    const fp one(array<uint64_t, 6>{1, 0, 0, 0, 0, 0});
+    const fp two_words_minus_one(array<uint64_t, 6>{maximum, maximum, 0, 0, 0, 0});
+    const fp two_words(array<uint64_t, 6>{0, 0, 1, 0, 0, 0});
+    const fp borrow_operand(array<uint64_t, 6>{1, maximum, 0, 0, 0, 0});
+    fp result;
+    _add(&result, &one, &two_words_minus_one);
+    ++checks;
+    if(result.d != two_words.d)
+    {
+        ++failures;
+        cerr << "_add cross-limb got=" << result.d[0] << ',' << result.d[1] << ',' << result.d[2]
+             << " expected=0,0,1\n";
+    }
+    _subtract(&result, &two_words, &borrow_operand);
+    ++checks;
+    if(result.d != array<uint64_t, 6>{maximum, 0, 0, 0, 0, 0})
+    {
+        ++failures;
+        cerr << "_subtract cross-limb got=" << result.d[0] << ',' << result.d[1] << ',' << result.d[2]
+             << " expected=" << maximum << ",0,0\n";
+    }
+    cout << "carry_borrow_checks=" << checks << " failures=" << failures << endl;
+    if(failures)
+        throw invalid_argument("carry/borrow regression failed");
+}
 
 array<uint64_t, 4> random_scalar()
 {
@@ -1003,6 +1070,7 @@ void TestG1WeightedSumExpected()
 void TestG1WeightedSumBatch()
 {
     const auto doTest = [](int64_t n) {
+        cout << "nBEGIN TestG1WeightedSumBatch n=" << n << endl;
         vector<array<uint64_t, 4>> scalars;
         vector<g1> bases;
 
@@ -1023,6 +1091,7 @@ void TestG1WeightedSumBatch()
         {
             throw invalid_argument("bad G1 weighted sum");
         }
+        cout << "nEND TestG1WeightedSumBatch n=" << n << endl;
     };
 
     doTest(0);
@@ -1327,6 +1396,7 @@ void TestG2WeightedSumExpected()
 void TestG2WeightedSumBatch()
 {
     const auto doTest = [](int64_t n) {
+        cout << "nBEGIN TestG2WeightedSumBatch n=" << n << endl;
         vector<array<uint64_t, 4>> scalars;
         vector<g2> bases;
 
@@ -1347,6 +1417,7 @@ void TestG2WeightedSumBatch()
         {
             throw invalid_argument("bad G2 weighted sum");
         }
+        cout << "nEND TestG2WeightedSumBatch n=" << n << endl;
     };
     
     doTest(0);
@@ -2297,61 +2368,71 @@ void TestOutOfRangeInputs() {
     }
 }
 
+void run_test(const char* name, void (*fn)())
+{
+    cout << "BEGIN " << name << endl;
+    const auto start = chrono::steady_clock::now();
+    fn();
+    const auto elapsed = chrono::duration<double>(chrono::steady_clock::now() - start).count();
+    cout << "END " << name << " elapsed_seconds=" << elapsed << endl;
+}
+
 int main()
 {
-    TestScalar();
+    run_test("TestCarryBorrowRegressions", TestCarryBorrowRegressions);
+    run_test("TestScalar", TestScalar);
 
-    TestFieldElementValidation();
-    TestFieldElementEquality();
-    TestFieldElementArithmeticCornerCases();
-    TestFieldElementHelpers();
-    TestFieldElementSerialization();
-    TestFieldElementByteInputs();
+    run_test("TestFieldElementValidation", TestFieldElementValidation);
+    run_test("TestFieldElementEquality", TestFieldElementEquality);
+    run_test("TestFieldElementArithmeticCornerCases", TestFieldElementArithmeticCornerCases);
+    run_test("TestFieldElementHelpers", TestFieldElementHelpers);
+    run_test("TestFieldElementSerialization", TestFieldElementSerialization);
+    run_test("TestFieldElementByteInputs", TestFieldElementByteInputs);
 
-    TestArithmeticOpraters();
+    run_test("TestArithmeticOpraters", TestArithmeticOpraters);
 
-    TestSqrt();
-    TestInverse();
-    TestMod();
-    TestExp();
+    run_test("TestSqrt", TestSqrt);
+    run_test("TestInverse", TestInverse);
+    run_test("TestMod", TestMod);
+    run_test("TestExp", TestExp);
 
-    TestG1Serialization();
-    TestG1SerializationGarbage();
-    TestG1IsOnCurve();
-    TestG1AdditiveProperties();
-    TestG1MultiplicativePropertiesExpected();
-    TestG1MultiplicativeProperties();
-    TestG1WeightedSumExpected();
-    TestG1WeightedSumBatch();
-    TestG1MapToCurve();
+    run_test("TestG1Serialization", TestG1Serialization);
+    run_test("TestG1SerializationGarbage", TestG1SerializationGarbage);
+    run_test("TestG1IsOnCurve", TestG1IsOnCurve);
+    run_test("TestG1AdditiveProperties", TestG1AdditiveProperties);
+    run_test("TestG1MultiplicativePropertiesExpected", TestG1MultiplicativePropertiesExpected);
+    run_test("TestG1MultiplicativeProperties", TestG1MultiplicativeProperties);
+    run_test("TestG1WeightedSumExpected", TestG1WeightedSumExpected);
+    run_test("TestG1WeightedSumBatch", TestG1WeightedSumBatch);
+    run_test("TestG1MapToCurve", TestG1MapToCurve);
 
-    TestG2Serialization();
-    TestG2SerializationGarbage();
-    TestG2IsOnCurve();
-    TestG2AdditiveProperties();
-    TestG2MultiplicativeProperties();
-    TestG2WeightedSumExpected();
-    TestG2WeightedSumBatch();
-    TestG2MapToCurve();
+    run_test("TestG2Serialization", TestG2Serialization);
+    run_test("TestG2SerializationGarbage", TestG2SerializationGarbage);
+    run_test("TestG2IsOnCurve", TestG2IsOnCurve);
+    run_test("TestG2AdditiveProperties", TestG2AdditiveProperties);
+    run_test("TestG2MultiplicativeProperties", TestG2MultiplicativeProperties);
+    run_test("TestG2WeightedSumExpected", TestG2WeightedSumExpected);
+    run_test("TestG2WeightedSumBatch", TestG2WeightedSumBatch);
+    run_test("TestG2MapToCurve", TestG2MapToCurve);
 
-    TestPairingExpected();
-    TestPairingNonDegeneracy();
-    TestPairingBilinearity();
-    TestPairingMulti();
+    run_test("TestPairingExpected", TestPairingExpected);
+    run_test("TestPairingNonDegeneracy", TestPairingNonDegeneracy);
+    run_test("TestPairingBilinearity", TestPairingBilinearity);
+    run_test("TestPairingMulti", TestPairingMulti);
 
-    TestsEIP2333();
-    TestUnhardenedHDKeys();
-    TestIETFVectors();
-    TestChiaVectors();
-    TestChiaVectors2();
+    run_test("TestsEIP2333", TestsEIP2333);
+    run_test("TestUnhardenedHDKeys", TestUnhardenedHDKeys);
+    run_test("TestIETFVectors", TestIETFVectors);
+    run_test("TestChiaVectors", TestChiaVectors);
+    run_test("TestChiaVectors2", TestChiaVectors2);
 
-    TestSignatures();
-    TestAugScheme();
-    TestAggregateSKs();
-    TestPopScheme();
+    run_test("TestSignatures", TestSignatures);
+    run_test("TestAugScheme", TestAugScheme);
+    run_test("TestAggregateSKs", TestAggregateSKs);
+    run_test("TestPopScheme", TestPopScheme);
 
-    TestExtraVectors();
-    TestOutOfRangeInputs();
+    run_test("TestExtraVectors", TestExtraVectors);
+    run_test("TestOutOfRangeInputs", TestOutOfRangeInputs);
 
     return 0;
 }

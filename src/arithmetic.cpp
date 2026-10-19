@@ -1,5 +1,5 @@
 #include <bls12-381/bls12-381.hpp>
-#ifdef __x86_64__
+#if defined(__x86_64__) && !defined(__APPLE__)
 #include <cpuid.h>
 #endif
 
@@ -8,7 +8,7 @@ using namespace std;
 namespace bls12_381
 {
 
-#ifndef __x86_64__
+#if !defined(__x86_64__) || defined(__APPLE__)
 void _add(fp* z, const fp* x, const fp* y)
 {
     uint64_t carry, _;
@@ -115,7 +115,7 @@ void _lsubtract(fp* z, const fp* x, const fp* y)
 }
 #endif
 
-#ifdef __x86_64__
+#if defined(__x86_64__) && !defined(__APPLE__)
 void __negate(fp* z, const fp* x);
 void _negate(fp* z, const fp* x)
 {
@@ -144,7 +144,7 @@ void _negate(fp* z, const fp* x)
 }
 #endif
 
-#ifdef __x86_64__
+#if defined(__x86_64__) && !defined(__APPLE__)
 void __multiply(fp* z, const fp* x, const fp* y);
 void __mul_ex(fp* z, const fp* x, const fp* y);
 
@@ -316,7 +316,7 @@ void _multiply(fp* z, const fp* x, const fp* y)
 }
 #endif
 
-#ifdef __x86_64__
+#if defined(__x86_64__) && !defined(__APPLE__)
 void _square(fp* z, const fp* x)
 {
     __multiply(z, x, x);
@@ -439,8 +439,9 @@ tuple<uint64_t, uint64_t> Add64(
     const uint64_t& carry
 )
 {
-    uint64_t sum = (x + y) + carry;
-    uint64_t carryOut = (sum < x);
+    uint64_t partial = x + y;
+    uint64_t sum = partial + carry;
+    uint64_t carryOut = (partial < x) | (sum < partial);
     return {sum, carryOut};
 }
 
@@ -455,8 +456,9 @@ tuple<uint64_t, uint64_t> Sub64(
     const uint64_t& borrow
 )
 {
-    uint64_t diff = x - y - borrow;
-    uint64_t borrowOut = (diff > x);
+    uint64_t partial = x - y;
+    uint64_t diff = partial - borrow;
+    uint64_t borrowOut = (x < y) | (partial < borrow);
     return {diff, borrowOut};
 }
 
