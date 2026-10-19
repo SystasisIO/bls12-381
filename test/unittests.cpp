@@ -2,6 +2,7 @@
 #include <vector>
 #include <random>
 #include <iostream>
+#include <chrono>
 
 #include <bls12-381/bls12-381.hpp>
 
@@ -1069,6 +1070,7 @@ void TestG1WeightedSumExpected()
 void TestG1WeightedSumBatch()
 {
     const auto doTest = [](int64_t n) {
+        cout << "nBEGIN TestG1WeightedSumBatch n=" << n << endl;
         vector<array<uint64_t, 4>> scalars;
         vector<g1> bases;
 
@@ -1089,6 +1091,7 @@ void TestG1WeightedSumBatch()
         {
             throw invalid_argument("bad G1 weighted sum");
         }
+        cout << "nEND TestG1WeightedSumBatch n=" << n << endl;
     };
 
     doTest(0);
@@ -1393,6 +1396,7 @@ void TestG2WeightedSumExpected()
 void TestG2WeightedSumBatch()
 {
     const auto doTest = [](int64_t n) {
+        cout << "nBEGIN TestG2WeightedSumBatch n=" << n << endl;
         vector<array<uint64_t, 4>> scalars;
         vector<g2> bases;
 
@@ -1413,6 +1417,7 @@ void TestG2WeightedSumBatch()
         {
             throw invalid_argument("bad G2 weighted sum");
         }
+        cout << "nEND TestG2WeightedSumBatch n=" << n << endl;
     };
     
     doTest(0);
@@ -2363,62 +2368,71 @@ void TestOutOfRangeInputs() {
     }
 }
 
+void run_test(const char* name, void (*fn)())
+{
+    cout << "BEGIN " << name << endl;
+    const auto start = chrono::steady_clock::now();
+    fn();
+    const auto elapsed = chrono::duration<double>(chrono::steady_clock::now() - start).count();
+    cout << "END " << name << " elapsed_seconds=" << elapsed << endl;
+}
+
 int main()
 {
-    TestCarryBorrowRegressions();
-    TestScalar();
+    run_test("TestCarryBorrowRegressions", TestCarryBorrowRegressions);
+    run_test("TestScalar", TestScalar);
 
-    TestFieldElementValidation();
-    TestFieldElementEquality();
-    TestFieldElementArithmeticCornerCases();
-    TestFieldElementHelpers();
-    TestFieldElementSerialization();
-    TestFieldElementByteInputs();
+    run_test("TestFieldElementValidation", TestFieldElementValidation);
+    run_test("TestFieldElementEquality", TestFieldElementEquality);
+    run_test("TestFieldElementArithmeticCornerCases", TestFieldElementArithmeticCornerCases);
+    run_test("TestFieldElementHelpers", TestFieldElementHelpers);
+    run_test("TestFieldElementSerialization", TestFieldElementSerialization);
+    run_test("TestFieldElementByteInputs", TestFieldElementByteInputs);
 
-    TestArithmeticOpraters();
+    run_test("TestArithmeticOpraters", TestArithmeticOpraters);
 
-    TestSqrt();
-    TestInverse();
-    TestMod();
-    TestExp();
+    run_test("TestSqrt", TestSqrt);
+    run_test("TestInverse", TestInverse);
+    run_test("TestMod", TestMod);
+    run_test("TestExp", TestExp);
 
-    TestG1Serialization();
-    TestG1SerializationGarbage();
-    TestG1IsOnCurve();
-    TestG1AdditiveProperties();
-    TestG1MultiplicativePropertiesExpected();
-    TestG1MultiplicativeProperties();
-    TestG1WeightedSumExpected();
-    TestG1WeightedSumBatch();
-    TestG1MapToCurve();
+    run_test("TestG1Serialization", TestG1Serialization);
+    run_test("TestG1SerializationGarbage", TestG1SerializationGarbage);
+    run_test("TestG1IsOnCurve", TestG1IsOnCurve);
+    run_test("TestG1AdditiveProperties", TestG1AdditiveProperties);
+    run_test("TestG1MultiplicativePropertiesExpected", TestG1MultiplicativePropertiesExpected);
+    run_test("TestG1MultiplicativeProperties", TestG1MultiplicativeProperties);
+    run_test("TestG1WeightedSumExpected", TestG1WeightedSumExpected);
+    run_test("TestG1WeightedSumBatch", TestG1WeightedSumBatch);
+    run_test("TestG1MapToCurve", TestG1MapToCurve);
 
-    TestG2Serialization();
-    TestG2SerializationGarbage();
-    TestG2IsOnCurve();
-    TestG2AdditiveProperties();
-    TestG2MultiplicativeProperties();
-    TestG2WeightedSumExpected();
-    TestG2WeightedSumBatch();
-    TestG2MapToCurve();
+    run_test("TestG2Serialization", TestG2Serialization);
+    run_test("TestG2SerializationGarbage", TestG2SerializationGarbage);
+    run_test("TestG2IsOnCurve", TestG2IsOnCurve);
+    run_test("TestG2AdditiveProperties", TestG2AdditiveProperties);
+    run_test("TestG2MultiplicativeProperties", TestG2MultiplicativeProperties);
+    run_test("TestG2WeightedSumExpected", TestG2WeightedSumExpected);
+    run_test("TestG2WeightedSumBatch", TestG2WeightedSumBatch);
+    run_test("TestG2MapToCurve", TestG2MapToCurve);
 
-    TestPairingExpected();
-    TestPairingNonDegeneracy();
-    TestPairingBilinearity();
-    TestPairingMulti();
+    run_test("TestPairingExpected", TestPairingExpected);
+    run_test("TestPairingNonDegeneracy", TestPairingNonDegeneracy);
+    run_test("TestPairingBilinearity", TestPairingBilinearity);
+    run_test("TestPairingMulti", TestPairingMulti);
 
-    TestsEIP2333();
-    TestUnhardenedHDKeys();
-    TestIETFVectors();
-    TestChiaVectors();
-    TestChiaVectors2();
+    run_test("TestsEIP2333", TestsEIP2333);
+    run_test("TestUnhardenedHDKeys", TestUnhardenedHDKeys);
+    run_test("TestIETFVectors", TestIETFVectors);
+    run_test("TestChiaVectors", TestChiaVectors);
+    run_test("TestChiaVectors2", TestChiaVectors2);
 
-    TestSignatures();
-    TestAugScheme();
-    TestAggregateSKs();
-    TestPopScheme();
+    run_test("TestSignatures", TestSignatures);
+    run_test("TestAugScheme", TestAugScheme);
+    run_test("TestAggregateSKs", TestAggregateSKs);
+    run_test("TestPopScheme", TestPopScheme);
 
-    TestExtraVectors();
-    TestOutOfRangeInputs();
+    run_test("TestExtraVectors", TestExtraVectors);
+    run_test("TestOutOfRangeInputs", TestOutOfRangeInputs);
 
     return 0;
 }
